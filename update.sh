@@ -120,17 +120,9 @@ remove_unwanted_packages() {
         \rm -rf ./package/istore
     fi
 
+    # ipq60xx不支持NSS offload mnet_rx
     if grep -q "nss_packages" "$BUILD_DIR/$FEEDS_CONF"; then
-        local nss_packages_dirs=(
-            "$BUILD_DIR/feeds/luci/protocols/luci-proto-quectel"
-            "$BUILD_DIR/feeds/packages/net/quectel-cm"
-            "$BUILD_DIR/feeds/packages/kernel/quectel-qmi-wwan"
-        )
-        for dir in "${nss_packages_dirs[@]}"; do
-            if [[ -d "$dir" ]]; then
-                \rm -rf "$dir"
-            fi
-        done
+        rm -rf "$BUILD_DIR/feeds/nss_packages/wwan"
     fi
 
     # 临时放一下，清理脚本
@@ -183,7 +175,8 @@ fix_default_set() {
         find "$BUILD_DIR/feeds/small8/luci-theme-argon" -type f -name "cascade*" -exec sed -i 's/--bar-bg/--primary/g' {} \;
     fi
 
-    install -Dm755 "$BASE_PATH/patches/99_set_argon_primary" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/99_set_argon_primary"
+    install -Dm755 "$BASE_PATH/patches/990_set_argon_primary" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/990_set_argon_primary"
+    install -Dm755 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
 
     if [ -f "$BUILD_DIR/package/emortal/autocore/files/tempinfo" ]; then
         if [ -f "$BASE_PATH/patches/tempinfo" ]; then
@@ -270,6 +263,7 @@ remove_something_nss_kmod() {
         sed -i '/kmod-qca-nss-drv-wifi-meshmgr/d' $ipq_mk_path
         sed -i '/kmod-qca-nss-macsec/d' $ipq_mk_path
 
+        sed -i 's/automount //g' $ipq_mk_path
         sed -i 's/cpufreq //g' $ipq_mk_path
     fi
 }
@@ -406,9 +400,6 @@ update_pw() {
     local smartdns_lua_path="$pw_share_dir/helper_smartdns_add.lua"
     local rules_dir="$pw_share_dir/rules"
 
-    # 删除 helper_smartdns_add.lua 文件中的特定行
-    [ -f "$smartdns_lua_path" ] && sed -i '/force-qtype-SOA 65/d' "$smartdns_lua_path"
-
     # 清空chnlist
     [ -f "$rules_dir/chnlist" ] && echo "" >"$rules_dir/chnlist"
 }
@@ -519,7 +510,7 @@ update_package() {
         if [ -z $PKG_REPO ]; then
             return 0
         fi
-        local PKG_VER=$(curl -sL "https://api.github.com/repos/$PKG_REPO/releases" | jq -r "map(select(.prerelease|not)) | first | .tag_name")
+        local PKG_VER=$(curl -sL "https://api.github.com/repos/$PKG_REPO/releases" | jq -r '.[0].tag_name')
         PKG_VER=$(echo $PKG_VER | grep -oE "[\.0-9]{1,}")
 
         local PKG_NAME=$(awk -F"=" '/PKG_NAME:=/ {print $NF}' $mk_path | grep -oE "[-_:/\$\(\)\?\.a-zA-Z0-9]{1,}")
@@ -717,10 +708,10 @@ update_dns_app_menu_location() {
     fi
 }
 
-remove_easytier_web() {
-    local easytier_path="$BUILD_DIR/package/feeds/small8/easytier/Makefile"
+fix_easytier() {
+    local easytier_path="$BUILD_DIR/package/feeds/small8/luci-app-easytier/luasrc/model/cbi/easytier.lua"
     if [ -d "${easytier_path%/*}" ] && [ -f "$easytier_path" ]; then
-        sed -i '/easytier-web/d' "$easytier_path"
+        sed -i 's/util/xml/g' "$easytier_path"
     fi
 }
 
@@ -741,6 +732,15 @@ update_geoip() {
                 fi
             fi
         fi
+    fi
+}
+
+update_lucky() {
+    local version=$(find "$BASE_PATH/patches" -name "lucky*" -printf "%f\n" | head -n 1 | awk -F'_' '{print $2}')
+    local mk_dir="$BUILD_DIR/feeds/small8/lucky/Makefile"
+    if [ -d "${mk_dir%/*}" ] && [ -f "$mk_dir" ]; then
+        sed -i '/Build\/Prepare/ a\	[ -f $(TOPDIR)/../patches/lucky_'${version}'_Linux_$(LUCKY_ARCH)_wanji.tar.gz ] && install -Dm644 $(TOPDIR)/../patches/lucky_'${version}'_Linux_$(LUCKY_ARCH)_wanji.tar.gz $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz' "$mk_dir"
+        sed -i '/wget/d' "$mk_dir"
     fi
 }
 
@@ -783,11 +783,13 @@ main() {
     update_oaf_deconfig
     add_timecontrol
     add_gecoosac
+    update_lucky
     install_feeds
     support_fw4_adg
     update_script_priority
-    remove_easytier_web
+    fix_easytier
     update_geoip
+    update_package "xray-core"
     # update_proxy_app_menu_location
     # update_dns_app_menu_location
 }
